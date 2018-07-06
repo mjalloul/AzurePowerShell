@@ -715,7 +715,8 @@ if(! $resume)
             $storageParams.Add("CustomDomainName", $CustomDomain)
         }
 
-        # add CustomDomainName if present.
+        $storageUpdateParams = @{}
+        # add Encryption if present.
         if($Encryption) 
         {
             if($Encryption.Services.Blob){$encryptionBlob  = 'Blob'}
@@ -723,8 +724,22 @@ if(! $resume)
             if($encryptionBlob){$EncryptionType = $encryptionBlob}
             if($encryptionFile){$EncryptionType = $encryptionFile}
             if($encryptionBlob -and $encryptionFile){$EncryptionType = "$encryptionBlob,$encryptionFile"}
+            # [MJ-7/5/2018]: The 'EnableEncryptionService' is no longer available in the New-AzureRmStorageAccount cmdlet. Use 'StorageEncryption' or 'KeyvaultEncryption' in the Set-AzureRmStorageAccount cmdlet instead.
+            #$storageParams.Add("EnableEncryptionService", $EncryptionType)
 
-            $storageParams.Add("EnableEncryptionService", $EncryptionType)
+            # [MJ-7/5/2018]: Check if the Services.KeySource is 'Microsoft.Storage' or 'Keyvault'.
+            # If Microsoft.Storage, set the StorageEncryption parameter in the Set-AzureRmStorageAccount call.
+            # TODO: If Keyvault, set the KeyvaultEncryption parameter as well as KeyName, KeyVersion, and KeyVaultUri (by using Encryption.KeyVaultProperties).
+            if($Encryption.Services.KeySource -eq 'Microsoft.Storage')
+            {
+                $storageUpdateParams.Add("StorageEncryption", "")
+            }
+            if ($Encryption.Services.KeySource -eq 'Keyvault')
+            {
+                # TODO: Currently not supporting Keyvault encryption yet in this script. So, defaulting back to Storage Encryption (MSFT-managed keys).
+                #$storageUpdateParams.Add("KeyvaultEncryption", "")
+                $storageUpdateParams.Add("StorageEncryption", "")
+            }
         }
         
 
@@ -737,6 +752,11 @@ if(! $resume)
                 write-verbose "Creating storage account $DeststorageAccountName in resource group $resourceGroupName at location $location" -verbose
                 $newStorageAccount = New-AzureRmStorageAccount @storageParams -ea Stop -wa SilentlyContinue 
                 write-output "The storage account $DeststorageAccountName was created"
+
+                if($storageUpdateParams.Count -gt 0) 
+                {
+                    $newStorageAccount = Set-AzureRmStorageAccount $newStorageAccount.ResourceGroupName $newStorageAccount.StorageAccountName @storageUpdateParams -ea Stop -wa SilentlyContinue 
+                }
             }
             catch
             {
@@ -796,7 +816,7 @@ if(! $resume)
     {
         if($resourceGroupName.Length -gt 16){$first16 = $resourceGroupName.Substring(0,16)}else{$first16 = $resourceGroupName }
         [string] $guid = (New-Guid).Guid
-        [string] $tempStorageAccountName = "$($first16.ToLower())"+($guid.Substring(0,8))
+        [string] $tempStorageAccountName = "$($first16.ToLower().Replace('-',''))"+($guid.Substring(0,8))
 
         
         $storageParams = @{
@@ -811,6 +831,7 @@ if(! $resume)
         {
             try
             {
+                $storageParams["Name"] = $tempstorageAccountName
                 # create new storage account
                 write-verbose "Creating temmporary storage account $tempstorageAccountName in resource group $resourceGroupName at location $location" -verbose
                 $newStorageAccount = New-AzureRmStorageAccount @storageParams -ea Stop -wa SilentlyContinue 
@@ -819,7 +840,7 @@ if(! $resume)
             catch
             {
                 $_
-                write-warning "Failed to create temporary storage account. Storage account name $DeststorageAccountName may already exists."
+                write-warning "Failed to create temporary storage account. Storage account name $tempstorageAccountName may already exist."
                 $tempstorageAccountName = read-host   'Enter a different Temporary Storage Account Name. This is used to stage managed disks.'
             }
         }
@@ -1014,6 +1035,7 @@ if(! $resume)
             $_
             write-warning "Failed to create availability set $AVname"
             } 
+        }
     }
 
 
